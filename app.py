@@ -132,3 +132,100 @@ def login():
             return 'Invalid credentials'
 
     return render_template('login.html')
+# API: login -> return JWT
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json() or {}
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({'msg': 'username and password required'}), 400
+    user = User.query.filter_by(username=username).first()
+    if user and pwd_context.verify(password, user.password):
+        token = create_access_token(identity=user.id)
+        refresh = create_refresh_token(identity=user.id)
+        return jsonify({'access_token': token, 'refresh_token': refresh, 'user': {'id': user.id, 'username': user.username}})
+    return jsonify({'msg': 'Bad credentials'}), 401
+
+
+# API: refresh access token
+@app.route('/api/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def api_refresh():
+    user_id = get_jwt_identity()
+    new_token = create_access_token(identity=user_id)
+    return jsonify({'access_token': new_token})
+
+# Đăng xuất người dùng
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+# Xem chi tiết phim và chọn ghế
+@app.route('/movie/<int:movie_id>', methods=['GET', 'POST'])
+@login_required
+def movie_detail(movie_id):
+    movie = Movie.query.get_or_404(movie_id)
+    seats = Seat.query.filter_by(movie_id=movie.id).all()
+    
+    if request.method == 'POST':
+        selected_seat_ids = request.form.getlist('seats')
+        if not selected_seat_ids:
+            return redirect(url_for('movie_detail', movie_id=movie.id))
+
+        seat_objs = []
+        seat_labels = []
+        price_per_seat = 5.0  # cố định giá mỗi ghế; thay đổi theo yêu cầu
+
+        # Kiểm tra và cập nhật trạng thái ghế
+        for seat_id in selected_seat_ids:
+            seat = Seat.query.get(int(seat_id))
+            if not seat or seat.movie_id != movie.id:
+                continue
+            if seat.status != 'available':
+                continue
+            seat.status = 'booked'
+            seat_objs.append(seat)
+            seat_labels.append(seat.seat_number)
+
+        if len(seat_objs) == 0:
+            return redirect(url_for('movie_detail', movie_id=movie.id))
+
+        # Tính tổng tiền và tạo Ticket
+        total = price_per_seat * len(seat_objs)
+        ticket = Ticket(user_id=current_user.id, movie_id=movie.id, seats=','.join(seat_labels), total_price=total)
+        db.session.add(ticket)
+
+        # Commit thay đổi ghế và ticket
+        try:
+            for s in seat_objs:
+                db.session.add(s)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return redirect(url_for('movie_detail', movie_id=movie.id))
+
+        return redirect(url_for('ticket_view', ticket_id=ticket.id))
+    
+    return render_template('movie_detail.html', movie=movie, seats=seats)
+
+
+# API: list movies
+@app.route('/api/movies', methods=['GET'])
+def api_movies():
+    movies = Movie.query.all()
+    out = []
+    for m in movies:
+        out.append({'id': m.id, 'title': m.title, 'description': m.description, 'image': m.image})
+    return jsonify(out)
+
+
+# API: movie details and seats
+@app.route('/api/movie/<int:movie_id>', methods=['GET'])
+def api_movie_detail(movie_id):
+    m = Movie.query.get_or_404(movie_id)
+    seats = Seat.query.filter_by(movie_id=m.id).all()
+    seats_out = [{'id': s.id, 'seat_number': s.seat_number, 'status': s.status} for s in seats]
+    return jsonify({'id': m.id, 'title': m.title, 'description': m.description, 'image': m.image, 'seats': seats_out})
