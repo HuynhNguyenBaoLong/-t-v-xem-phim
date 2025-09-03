@@ -417,3 +417,4 @@ if __name__ == '__main__':
 
     print(f"Starting server on {host}:{port} (LAN access: http://{local_ip}:{port} )")
     app.run(host=host, port=port, debug=debug)
+#check
